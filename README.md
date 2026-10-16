@@ -1,4 +1,4 @@
-# Product Management System
+# SDG Project Management System
 
 This repository contains the Product Management System developed for the SDG Hackathon.
 
