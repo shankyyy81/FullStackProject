@@ -1,54 +1,60 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import AuthLayout from '@/components/AuthLayout';
+import { useNavigate, Link } from 'react-router-dom';
 
 export default function Login() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
-    const [submitting, setSubmitting] = useState(false);
     const { login } = useAuth();
     const navigate = useNavigate();
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        setSubmitting(true);
-        setError('');
         try {
             await login(email, password);
             navigate('/dashboard');
-        } catch {
-            setError('That email and password do not match an account.');
-        } finally {
-            setSubmitting(false);
+        } catch (err) {
+            setError('Invalid credentials');
         }
     };
 
     return (
-        <AuthLayout
-            title="Sign in to SDG Project Manager"
-            subtitle="Open your projects, the team board and the literature assistant."
-            photo={{ src: '/images/university-lab.jpg' }}
-            footer={<>New here? <Link to="/register" className="font-medium text-ink underline underline-offset-4">Create an account</Link></>}
-        >
-            <form onSubmit={handleSubmit} className="grid gap-5">
-                <div className="grid gap-2">
-                    <Label htmlFor="email" className="text-[15px]">Email</Label>
-                    <Input id="email" type="email" autoComplete="email" className="h-11 rounded-none border-0 bg-white text-base" value={email} onChange={(e) => setEmail(e.target.value)} required />
+        <div className="container flex-center" style={{ minHeight: '80vh' }}>
+            <div className="card" style={{ width: '100%', maxWidth: '400px' }}>
+                <h2 className="text-center mb-4">Login</h2>
+                {error && <div className="alert alert-error text-center">{error}</div>}
+                <form onSubmit={handleSubmit}>
+                    <div className="form-group">
+                        <label className="form-label">Email</label>
+                        <input
+                            type="email"
+                            className="form-control"
+                            placeholder="Enter your email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            required
+                        />
+                    </div>
+                    <div className="form-group">
+                        <label className="form-label">Password</label>
+                        <input
+                            type="password"
+                            className="form-control"
+                            placeholder="Enter your password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            required
+                        />
+                    </div>
+                    <button type="submit" className="btn btn-primary btn-block mt-4">
+                        Sign In
+                    </button>
+                </form>
+                <div className="text-center mt-4 text-muted">
+                    Don't have an account? <Link to="/register" style={{ color: 'var(--primary)' }}>Register</Link>
                 </div>
-                <div className="grid gap-2">
-                    <Label htmlFor="password" className="text-[15px]">Password</Label>
-                    <Input id="password" type="password" autoComplete="current-password" className="h-11 rounded-none border-0 bg-white text-base" value={password} onChange={(e) => setPassword(e.target.value)} required />
-                </div>
-                {error && <p className="text-[15px] font-medium text-[#831c1e]" role="alert">{error}</p>}
-                <Button type="submit" disabled={submitting} className="mt-2 h-12 rounded-none bg-olive text-base text-olive-ink hover:bg-olive/90">
-                    {submitting ? 'Signing in…' : 'Sign in'}
-                </Button>
-            </form>
-        </AuthLayout>
+            </div>
+        </div>
     );
 }
