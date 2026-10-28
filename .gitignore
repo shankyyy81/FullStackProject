@@ -35,3 +35,12 @@ backend/app/ml_model/
 
 # User Uploads
 backend/uploads/
+
+# Local MCP config (shadcn MCP server) and the root package files its init created
+.mcp.json
+/package.json
+/package-lock.json
+
+# Frontend redesign notes and taste-skill working files
+FRONTEND_REDESIGN.md
+.taste-skill/
