@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import { ChevronRight, MessageSquare, Plus } from 'lucide-react';
+import { toast } from 'sonner';
 import {
     createProjectTask,
     getProjectWorkspace,
@@ -17,20 +18,29 @@ import {
     downloadAttachment,
 } from '../api/projects';
 import { useAuth } from '../context/AuthContext';
+import { goalsOfProject } from '@/lib/sdg';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { GoalTile, PersonDisc, StatusPill } from '@/components/marks';
+import TaskBoard, { BOARD_COLUMNS } from './workspace/TaskBoard';
+import LiteraturePanel from './workspace/LiteraturePanel';
+import TeamChat from './workspace/TeamChat';
 
-const BOARD_COLUMNS = [
-    { key: 'TODO', label: 'To Do' },
-    { key: 'IN_PROGRESS', label: 'In Progress' },
-    { key: 'DONE', label: 'Done' }
-];
+const EMPTY_TASK = { title: '', description: '', status: 'TODO' };
 
 export default function ProjectWorkspace() {
     const { projectId } = useParams();
     const { user } = useAuth();
     const [workspace, setWorkspace] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState('');
     const [saving, setSaving] = useState(false);
-    const [error, setError] = useState('');
     const [chatMessages, setChatMessages] = useState([]);
     const [chatText, setChatText] = useState('');
     const [chatSending, setChatSending] = useState(false);
@@ -40,80 +50,43 @@ export default function ProjectWorkspace() {
     const [ragLoading, setRagLoading] = useState(false);
     const [ragDocs, setRagDocs] = useState([]);
     const [ragUploadLoading, setRagUploadLoading] = useState(false);
-    const [newTask, setNewTask] = useState({
-        title: '',
-        description: '',
-        status: 'TODO'
-    });
+    const [newTask, setNewTask] = useState(EMPTY_TASK);
+    const [taskDialogOpen, setTaskDialogOpen] = useState(false);
     // attachment upload state: { [taskId]: { uploading: bool, error: string } }
     const [attachState, setAttachState] = useState({});
-    const fileInputRefs = useRef({});
 
-    // Drag and Drop state
-    const [dragOverCol, setDragOverCol] = useState(null);
-
-    const handleDragStart = (e, taskId) => {
-        e.dataTransfer.setData("taskId", taskId);
-    };
-    const handleDragOver = (e, colKey) => {
-        e.preventDefault();
-        setDragOverCol(colKey);
-    };
-    const handleDragLeave = () => {
-        setDragOverCol(null);
-    };
-    const handleDrop = (e, colKey) => {
-        e.preventDefault();
-        setDragOverCol(null);
-        const taskId = e.dataTransfer.getData("taskId");
-        if (taskId) {
-            handleMoveTask(taskId, colKey);
+    const loadWorkspace = async () => {
+        setLoadError('');
+        try {
+            setWorkspace(await getProjectWorkspace(projectId));
+        } catch (err) {
+            setLoadError(err.message || 'Failed to load project workspace');
+        } finally {
+            setLoading(false);
         }
     };
 
     useEffect(() => {
+        setLoading(true);
         loadWorkspace();
     }, [projectId]);
 
     useEffect(() => {
-        let intervalId;
         const loadChat = async () => {
             try {
-                const data = await getProjectChat(projectId);
-                setChatMessages(data);
+                setChatMessages(await getProjectChat(projectId));
             } catch {
                 // Keep workspace usable even if chat polling fails transiently.
             }
         };
         loadChat();
-        intervalId = setInterval(loadChat, 5000);
+        const intervalId = setInterval(loadChat, 5000);
         return () => clearInterval(intervalId);
     }, [projectId]);
 
     useEffect(() => {
-        const loadLiteratureDocs = async () => {
-            try {
-                const docs = await listLiteratureDocuments(projectId);
-                setRagDocs(docs);
-            } catch {
-                setRagDocs([]);
-            }
-        };
-        loadLiteratureDocs();
+        listLiteratureDocuments(projectId).then(setRagDocs).catch(() => setRagDocs([]));
     }, [projectId]);
-
-    const loadWorkspace = async () => {
-        setLoading(true);
-        setError('');
-        try {
-            const data = await getProjectWorkspace(projectId);
-            setWorkspace(data);
-        } catch (err) {
-            setError(err.message || 'Failed to load project workspace');
-        } finally {
-            setLoading(false);
-        }
-    };
 
     const groupedTasks = useMemo(() => {
         const groups = { TODO: [], IN_PROGRESS: [], DONE: [] };
@@ -123,47 +96,35 @@ export default function ProjectWorkspace() {
         return groups;
     }, [workspace]);
 
-    const progress = useMemo(() => {
-        const total = (workspace?.tasks || []).length;
-        if (total === 0) return { done: 0, inProgress: 0 };
-        const done = workspace.tasks.filter((t) => t.status === 'DONE').length;
-        const inProgress = workspace.tasks.filter((t) => t.status === 'IN_PROGRESS').length;
-        return {
-            done: Math.round((done / total) * 100),
-            inProgress: Math.round((inProgress / total) * 100),
-        };
-    }, [workspace]);
-
     const handleCreateTask = async (e) => {
         e.preventDefault();
         if (!newTask.title.trim()) return;
         setSaving(true);
-        setError('');
         try {
             await createProjectTask(projectId, {
                 title: newTask.title.trim(),
                 description: newTask.description.trim(),
-                status: newTask.status
+                status: newTask.status,
             });
-            setNewTask({ title: '', description: '', status: 'TODO' });
+            setNewTask(EMPTY_TASK);
+            setTaskDialogOpen(false);
             await loadWorkspace();
         } catch (err) {
-            setError(err.message || 'Failed to create task');
+            toast.error(err.message || 'Failed to create task');
         } finally {
             setSaving(false);
         }
     };
 
     const handleMoveTask = async (taskId, status) => {
-        setError('');
         try {
             const updatedTask = await updateProjectTask(projectId, taskId, { status });
             setWorkspace((prev) => ({
                 ...prev,
-                tasks: prev.tasks.map((t) => (t.id === updatedTask.id ? updatedTask : t))
+                tasks: prev.tasks.map((t) => (t.id === updatedTask.id ? updatedTask : t)),
             }));
         } catch (err) {
-            setError(err.message || 'Failed to update task');
+            toast.error(err.message || 'Failed to update task');
         }
     };
 
@@ -174,11 +135,7 @@ export default function ProjectWorkspace() {
             const newAtt = await uploadAttachment(projectId, taskId, file);
             setWorkspace((prev) => ({
                 ...prev,
-                tasks: prev.tasks.map((t) =>
-                    t.id === taskId
-                        ? { ...t, attachments: [...(t.attachments || []), newAtt] }
-                        : t
-                ),
+                tasks: prev.tasks.map((t) => (t.id === taskId ? { ...t, attachments: [...(t.attachments || []), newAtt] } : t)),
             }));
             setAttachState((prev) => ({ ...prev, [taskId]: { uploading: false, error: '' } }));
         } catch (err) {
@@ -192,21 +149,16 @@ export default function ProjectWorkspace() {
             setWorkspace((prev) => ({
                 ...prev,
                 tasks: prev.tasks.map((t) =>
-                    t.id === taskId
-                        ? { ...t, attachments: (t.attachments || []).filter((a) => a.id !== attachmentId) }
-                        : t
+                    t.id === taskId ? { ...t, attachments: (t.attachments || []).filter((a) => a.id !== attachmentId) } : t
                 ),
             }));
         } catch (err) {
-            setError(err.message || 'Failed to delete attachment');
+            toast.error(err.message || 'Failed to delete attachment');
         }
     };
 
-    const formatBytes = (bytes) => {
-        if (bytes < 1024) return `${bytes} B`;
-        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    };
+    const handleDownloadAttachment = (taskId, att) =>
+        downloadAttachment(projectId, taskId, att.id, att.original_name).catch((err) => toast.error(err.message));
 
     const handleSendMessage = async (e) => {
         e.preventDefault();
@@ -218,7 +170,7 @@ export default function ProjectWorkspace() {
             setChatMessages((prev) => [...prev, saved]);
             setChatText('');
         } catch (err) {
-            setError(err.message || 'Failed to send message');
+            toast.error(err.message || 'Failed to send message');
         } finally {
             setChatSending(false);
         }
@@ -228,15 +180,12 @@ export default function ProjectWorkspace() {
         e.preventDefault();
         const question = ragQuery.trim();
         if (!question) return;
-
         setRagLoading(true);
         setRagAnswer('');
-        setError('');
         try {
-            const answer = await queryRagAnswer(projectId, question, 4);
-            setRagAnswer(answer);
+            setRagAnswer(await queryRagAnswer(projectId, question, 4));
         } catch (err) {
-            setError(err.message || 'Failed to get AI answer');
+            toast.error(err.message || 'Failed to get AI answer');
         } finally {
             setRagLoading(false);
         }
@@ -247,13 +196,11 @@ export default function ProjectWorkspace() {
         e.target.value = '';
         if (!file) return;
         setRagUploadLoading(true);
-        setError('');
         try {
             await uploadLiteratureDocument(projectId, file);
-            const docs = await listLiteratureDocuments(projectId);
-            setRagDocs(docs);
+            setRagDocs(await listLiteratureDocuments(projectId));
         } catch (err) {
-            setError(err.message || 'Failed to upload literature document');
+            toast.error(err.message || 'Failed to upload literature document');
         } finally {
             setRagUploadLoading(false);
         }
@@ -264,345 +211,255 @@ export default function ProjectWorkspace() {
             await deleteLiteratureDocument(projectId, documentId);
             setRagDocs((prev) => prev.filter((d) => d.id !== documentId));
         } catch (err) {
-            setError(err.message || 'Failed to delete literature document');
+            toast.error(err.message || 'Failed to delete literature document');
         }
     };
 
-    if (loading) return <div className="text-center mt-8">Loading workspace...</div>;
-    if (!workspace) return <div className="text-center mt-8">Workspace unavailable.</div>;
+    if (loading) return <WorkspaceSkeleton />;
+    if (!workspace) {
+        return (
+            <div className="flex flex-col gap-4">
+                <Breadcrumb title="Workspace" />
+                <div className="flex items-center justify-between gap-4 rounded-[var(--radius-card)] border bg-card px-5 py-4 text-sm">
+                    <span>Couldn’t open this workspace. {loadError}.</span>
+                    <Button variant="ghost" size="sm" onClick={() => { setLoading(true); loadWorkspace(); }}>Retry</Button>
+                </div>
+            </div>
+        );
+    }
+
+    const goals = goalsOfProject(workspace);
+    const tasks = workspace.tasks || [];
+    const people = [workspace.leader_name, ...(workspace.member_names || [])].filter(Boolean);
 
     return (
-        <motion.div
-            className="container workspace-shell"
-            style={{ paddingBottom: '2rem' }}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4 }}
-        >
-            <div className="workspace-header card mb-4">
-                <h2 style={{ marginBottom: '0.5rem' }}>{workspace.title}</h2>
-                <p className="text-muted"><strong>Problem Statement:</strong> {workspace.problem_statement}</p>
-                <div className="d-flex gap-4 mt-2" style={{ flexWrap: 'wrap' }}>
-                    <span><strong>Faculty:</strong> {workspace.faculty_name || 'N/A'}</span>
-                    <span><strong>Team:</strong> {workspace.team_name || 'Not assigned'}</span>
-                    <span><strong>Project Status:</strong> {workspace.status}</span>
-                </div>
-                <div className="mt-2">
-                    <strong>Team Members:</strong>{' '}
-                    {workspace.member_names && workspace.member_names.length > 0
-                        ? workspace.member_names.join(', ')
-                        : 'No members yet'}
-                </div>
-            </div>
-
-            <div className="card mb-4">
-                <h3 style={{ fontSize: '1.2rem' }}>Project Progress</h3>
-                <div className="progress-track mt-2">
-                    <div className="progress-done" style={{ width: `${progress.done}%` }} />
-                </div>
-                <div className="d-flex gap-4 mt-2 text-muted">
-                    <span>Done: {progress.done}%</span>
-                    <span>In Progress: {progress.inProgress}%</span>
-                    <span>Total Tasks: {(workspace.tasks || []).length}</span>
-                </div>
-            </div>
-
-            <div className="card mb-4">
-                <h3 style={{ fontSize: '1.2rem' }}>AI Assistant</h3>
-                <div className="mb-3">
-                    <label className="form-label">Upload literature file (PDF/TXT/MD)</label>
-                    <input
-                        type="file"
-                        className="form-control"
-                        accept=".pdf,.txt,.md"
-                        onChange={handleLiteratureUpload}
-                        disabled={ragUploadLoading}
-                    />
-                    <div className="text-muted" style={{ fontSize: '0.85rem', marginTop: '0.5rem' }}>
-                        {ragUploadLoading ? 'Indexing document...' : `Indexed documents: ${ragDocs.length}`}
-                    </div>
-                    {ragDocs.length > 0 && (
-                        <div style={{ marginTop: '0.5rem' }}>
-                            {ragDocs.map((d) => (
-                                <div key={d.id} className="d-flex items-center gap-2" style={{ marginBottom: '0.35rem' }}>
-                                    <span className="text-muted" style={{ fontSize: '0.85rem' }}>{d.filename}</span>
-                                    <button
-                                        type="button"
-                                        className="btn btn-secondary"
-                                        style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}
-                                        onClick={() => downloadLiteratureDocument(projectId, d.id, d.filename)}
-                                    >
-                                        Download
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className="btn btn-secondary"
-                                        style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem', backgroundColor: '#dc3545', color: '#fff', border: 'none' }}
-                                        onClick={() => handleDeleteLiteratureDoc(d.id)}
-                                    >
-                                        Delete
-                                    </button>
-                                </div>
-                            ))}
+        <div className="flex flex-col gap-6">
+            <header className="flex flex-col gap-4">
+                <Breadcrumb title={workspace.title} />
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="min-w-0 max-w-3xl">
+                        <div className="flex flex-wrap items-center gap-3">
+                            <h1 className="text-2xl font-semibold tracking-[-0.01em]">{workspace.title}</h1>
+                            <StatusPill status={workspace.status} />
                         </div>
+                        <p className="mt-1.5 line-clamp-2 text-sm leading-6 text-muted-foreground" title={workspace.problem_statement}>
+                            {workspace.problem_statement}
+                        </p>
+                    </div>
+                    <div className="flex gap-2">
+                        <Button variant="outline" onClick={() => setIsChatOpen(true)}>
+                            <MessageSquare /> Team chat
+                            {chatMessages.length > 0 && <span className="num text-muted-foreground">{chatMessages.length}</span>}
+                        </Button>
+                        <Button onClick={() => setTaskDialogOpen(true)}>
+                            <Plus /> Add task
+                        </Button>
+                    </div>
+                </div>
+            </header>
+
+            {/* Progress against the plan, then who is on the project, in one divided card */}
+            <section aria-label="Project summary" className="grid rounded-[var(--radius-card)] border bg-card lg:grid-cols-[minmax(0,1.3fr)_minmax(0,0.9fr)_minmax(0,1.3fr)]">
+                <Progress tasks={tasks} groupedTasks={groupedTasks} />
+                <div className="flex flex-col gap-3 border-t p-5 lg:border-t-0 lg:border-l">
+                    <h2 className="text-sm text-muted-foreground">Goals</h2>
+                    {goals.length ? (
+                        <ul className="flex flex-col gap-2">
+                            {goals.map((g) => (
+                                <li key={g.n} className="flex items-center gap-2.5 text-sm">
+                                    <GoalTile goal={g} size="sm" /> {g.name}
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <span className="text-sm text-muted-foreground">—</span>
                     )}
                 </div>
-                <form onSubmit={handleAskRag} className="mt-2">
-                    <div className="form-group">
-                        <label className="form-label">Ask for literature survey insights</label>
-                        <input
-                            className="form-control"
-                            value={ragQuery}
-                            onChange={(e) => setRagQuery(e.target.value)}
-                            placeholder="What methods are commonly used for this problem?"
-                        />
-                    </div>
-                    <button className="btn btn-primary" disabled={ragLoading || !ragQuery.trim() || ragDocs.length === 0}>
-                        {ragLoading ? 'Generating...' : 'Get Answer'}
-                    </button>
-                </form>
-                {ragAnswer && (
-                    <div className="mt-3" style={{ whiteSpace: 'pre-wrap' }}>
-                        {ragAnswer}
-                    </div>
-                )}
-            </div>
+                <div className="flex flex-col gap-3 border-t p-5 lg:border-t-0 lg:border-l">
+                    <h2 className="flex items-baseline justify-between text-sm text-muted-foreground">
+                        Team
+                        <span className="text-foreground">{workspace.team_name || 'Not assigned'}</span>
+                    </h2>
+                    <ul className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
+                        <li className="flex min-w-0 items-center gap-2.5">
+                            <PersonDisc name={workspace.faculty_name || '?'} />
+                            <span className="min-w-0">
+                                <span className="block truncate">{workspace.faculty_name || '—'}</span>
+                                <span className="block text-xs text-muted-foreground">Faculty</span>
+                            </span>
+                        </li>
+                        {people.map((name, i) => (
+                            <li key={`${name}-${i}`} className="flex min-w-0 items-center gap-2.5">
+                                <PersonDisc name={name} />
+                                <span className="min-w-0">
+                                    <span className="block truncate">{name}</span>
+                                    <span className="block text-xs text-muted-foreground">{i === 0 && workspace.leader_name ? 'Leader' : 'Member'}</span>
+                                </span>
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            </section>
 
-            <div className="card mb-4">
-                <h3 style={{ fontSize: '1.2rem' }}>
-                    {user?.role === 'FACULTY' ? 'Faculty Task Board' : 'Team Task Board'}
-                </h3>
-                <form onSubmit={handleCreateTask} className="mt-2">
-                    <div className="grid grid-cols-1 grid-cols-2 gap-2">
-                        <div className="form-group">
-                            <label className="form-label">Task Title</label>
-                            <input
-                                className="form-control"
+            <Tabs defaultValue="board" className="gap-4">
+                <TabsList variant="line" className="h-9 w-full justify-start border-b">
+                    <TabsTrigger value="board" className="flex-none px-2">
+                        {user?.role === 'FACULTY' ? 'Task board' : 'Team board'}
+                        <span className="num font-normal text-muted-foreground">{tasks.length}</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="literature" className="flex-none px-2">
+                        Literature assistant
+                        <span className="num font-normal text-muted-foreground">{ragDocs.length}</span>
+                    </TabsTrigger>
+                </TabsList>
+                <TabsContent value="board">
+                    <TaskBoard
+                        groupedTasks={groupedTasks}
+                        onMove={handleMoveTask}
+                        onUpload={handleUpload}
+                        onDeleteAttachment={handleDeleteAttachment}
+                        onDownloadAttachment={handleDownloadAttachment}
+                        attachState={attachState}
+                    />
+                </TabsContent>
+                <TabsContent value="literature">
+                    <LiteraturePanel
+                        docs={ragDocs}
+                        uploading={ragUploadLoading}
+                        onUpload={handleLiteratureUpload}
+                        onDelete={handleDeleteLiteratureDoc}
+                        onDownload={(d) => downloadLiteratureDocument(projectId, d.id, d.filename).catch((err) => toast.error(err.message))}
+                        query={ragQuery}
+                        setQuery={setRagQuery}
+                        answer={ragAnswer}
+                        asking={ragLoading}
+                        onAsk={handleAskRag}
+                    />
+                </TabsContent>
+            </Tabs>
+
+            <Dialog open={taskDialogOpen} onOpenChange={setTaskDialogOpen}>
+                <DialogContent className="sm:max-w-md">
+                    <form onSubmit={handleCreateTask} className="grid gap-5">
+                        <DialogHeader>
+                            <DialogTitle>Add a task</DialogTitle>
+                            <DialogDescription className="truncate">{workspace.title}</DialogDescription>
+                        </DialogHeader>
+                        <div className="grid gap-2">
+                            <Label htmlFor="task-title">Title</Label>
+                            <Input
+                                id="task-title"
                                 value={newTask.title}
                                 onChange={(e) => setNewTask((prev) => ({ ...prev, title: e.target.value }))}
-                                placeholder="E.g., API integration"
+                                placeholder="Test filter flow rate at the pilot school"
                                 required
                             />
                         </div>
-                        <div className="form-group">
-                            <label className="form-label">Initial Status</label>
-                            <select
-                                className="form-control"
+                        <div className="grid gap-2">
+                            <Label htmlFor="task-description">Notes</Label>
+                            <Textarea
+                                id="task-description"
+                                rows={3}
+                                value={newTask.description}
+                                onChange={(e) => setNewTask((prev) => ({ ...prev, description: e.target.value }))}
+                                placeholder="What counts as done"
+                            />
+                        </div>
+                        <div className="grid gap-2">
+                            <Label id="task-status-label">Column</Label>
+                            <ToggleGroup
+                                type="single"
+                                variant="outline"
                                 value={newTask.status}
-                                onChange={(e) => setNewTask((prev) => ({ ...prev, status: e.target.value }))}
+                                onValueChange={(v) => v && setNewTask((prev) => ({ ...prev, status: v }))}
+                                aria-labelledby="task-status-label"
+                                className="justify-start"
                             >
                                 {BOARD_COLUMNS.map((col) => (
-                                    <option key={col.key} value={col.key}>{col.label}</option>
+                                    <ToggleGroupItem key={col.key} value={col.key} className="px-3">{col.label}</ToggleGroupItem>
                                 ))}
-                            </select>
+                            </ToggleGroup>
                         </div>
-                    </div>
-                    <div className="form-group">
-                        <label className="form-label">Description</label>
-                        <textarea
-                            className="form-control"
-                            rows="3"
-                            value={newTask.description}
-                            onChange={(e) => setNewTask((prev) => ({ ...prev, description: e.target.value }))}
-                            placeholder="Add acceptance criteria or notes"
-                        />
-                    </div>
-                    <button className="btn btn-primary" disabled={saving}>
-                        {saving ? 'Adding...' : 'Add To Do'}
-                    </button>
-                </form>
-                {error && <div className="alert alert-error mt-2">{error}</div>}
-            </div>
+                        <DialogFooter>
+                            <Button type="button" variant="outline" onClick={() => setTaskDialogOpen(false)}>Cancel</Button>
+                            <Button type="submit" disabled={saving || !newTask.title.trim()}>{saving ? 'Adding…' : 'Add task'}</Button>
+                        </DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
 
-            <div className="workspace-board">
-                {BOARD_COLUMNS.map((column) => (
-                    <div
-                        className={`workspace-col ${dragOverCol === column.key ? 'drag-over' : ''}`}
-                        key={column.key}
-                        onDragOver={(e) => handleDragOver(e, column.key)}
-                        onDragLeave={handleDragLeave}
-                        onDrop={(e) => handleDrop(e, column.key)}
-                    >
-                        <h4>{column.label}</h4>
-                        {groupedTasks[column.key].length === 0 ? (
-                            <div className="text-muted" style={{ fontSize: '0.9rem' }}>No tasks</div>
-                        ) : (
-                            <AnimatePresence>
-                                {groupedTasks[column.key].map((task) => (
-                                    <motion.div
-                                        layout
-                                        initial={{ opacity: 0, scale: 0.95 }}
-                                        animate={{ opacity: 1, scale: 1 }}
-                                        exit={{ opacity: 0, scale: 0.95 }}
-                                        transition={{ duration: 0.2 }}
-                                        key={task.id}
-                                        className="workspace-task"
-                                        draggable="true"
-                                        onDragStart={(e) => handleDragStart(e, task.id)}
-                                    >
-                                        <div className="d-flex justify-between items-center">
-                                            <strong>{task.title}</strong>
-                                        </div>
-                                        {task.description && (
-                                            <p className="text-muted" style={{ fontSize: '0.9rem', marginTop: '0.5rem' }}>
-                                                {task.description}
-                                            </p>
-                                        )}
-                                        <div className="text-muted" style={{ fontSize: '0.8rem' }}>
-                                            Added by: {task.created_by || 'Unknown'}
-                                        </div>
-                                        <div className="mt-2">
-                                            <select
-                                                className="form-control"
-                                                value={task.status}
-                                                onChange={(e) => handleMoveTask(task.id, e.target.value)}
-                                            >
-                                                {BOARD_COLUMNS.map((col) => (
-                                                    <option key={col.key} value={col.key}>{col.label}</option>
-                                                ))}
-                                            </select>
-                                        </div>
+            <TeamChat
+                open={isChatOpen}
+                onOpenChange={setIsChatOpen}
+                teamName={workspace.team_name}
+                people={people}
+                messages={chatMessages}
+                userId={user?.id}
+                text={chatText}
+                setText={setChatText}
+                sending={chatSending}
+                onSend={handleSendMessage}
+            />
+        </div>
+    );
+}
 
-                                        {/* ── Attachments ── */}
-                                        <div className="task-attachments">
-                                            {(task.attachments || []).length > 0 && (
-                                                <ul className="attachment-list">
-                                                    {(task.attachments || []).map((att) => (
-                                                        <li key={att.id} className="attachment-item">
-                                                            <span className="attachment-icon">📄</span>
-                                                            <span
-                                                                className="attachment-name"
-                                                                title={att.original_name}
-                                                            >
-                                                                {att.original_name.length > 24
-                                                                    ? att.original_name.slice(0, 22) + '…'
-                                                                    : att.original_name}
-                                                            </span>
-                                                            <span className="attachment-size">
-                                                                {formatBytes(att.size_bytes)}
-                                                            </span>
-                                                            <button
-                                                                className="attachment-btn download"
-                                                                title="Download"
-                                                                onClick={() =>
-                                                                    downloadAttachment(
-                                                                        projectId, task.id,
-                                                                        att.id, att.original_name
-                                                                    )
-                                                                }
-                                                            >⬇</button>
-                                                            <button
-                                                                className="attachment-btn delete"
-                                                                title="Delete"
-                                                                onClick={() =>
-                                                                    handleDeleteAttachment(task.id, att.id)
-                                                                }
-                                                            >🗑</button>
-                                                        </li>
-                                                    ))}
-                                                </ul>
-                                            )}
+function Breadcrumb({ title }) {
+    return (
+        <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-sm text-muted-foreground">
+            <Link to="/dashboard" className="hover:text-foreground">Projects</Link>
+            <ChevronRight className="size-3.5" />
+            <span className="truncate text-foreground">{title}</span>
+        </nav>
+    );
+}
 
-                                            {/* Hidden file input */}
-                                            <input
-                                                type="file"
-                                                style={{ display: 'none' }}
-                                                ref={(el) => { fileInputRefs.current[task.id] = el; }}
-                                                onChange={(e) => {
-                                                    handleUpload(task.id, e.target.files[0]);
-                                                    e.target.value = '';
-                                                }}
-                                            />
-                                            <button
-                                                className="attachment-upload-btn"
-                                                type="button"
-                                                disabled={attachState[task.id]?.uploading}
-                                                onClick={() => fileInputRefs.current[task.id]?.click()}
-                                            >
-                                                {attachState[task.id]?.uploading ? '⏳ Uploading…' : '📎 Attach file'}
-                                            </button>
-                                            {attachState[task.id]?.error && (
-                                                <div style={{ color: 'var(--color-error)', fontSize: '0.8rem', marginTop: '4px' }}>
-                                                    {attachState[task.id].error}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </motion.div>
-                                ))}
-                            </AnimatePresence>
-                        )}
-                    </div>
-                ))}
-            </div>
+// The plan bar: done in the data hue, in progress as a lighter step, to do as the track.
+function Progress({ tasks, groupedTasks }) {
+    const total = tasks.length;
+    const done = groupedTasks.DONE.length;
+    const doing = groupedTasks.IN_PROGRESS.length;
+    const todo = groupedTasks.TODO.length;
+    const pct = (n) => (total ? (n / total) * 100 : 0);
 
-            <button
-                className="smart-chat-launcher"
-                type="button"
-                onClick={() => setIsChatOpen((prev) => !prev)}
-                aria-label="Open team chat"
-                style={{ position: 'fixed', top: '12px', right: '18px', left: 'auto', bottom: 'auto', zIndex: 1200 }}
-            >
-                Team Chat
-            </button>
-
+    return (
+        <div className="flex flex-col gap-3 p-5">
+            <h2 className="text-sm text-muted-foreground">Progress</h2>
+            <p className="num text-[30px] leading-[30px]">
+                {done}<span className="text-base text-muted-foreground"> of {total} tasks done</span>
+            </p>
             <div
-                className={`smart-chat-panel ${isChatOpen ? 'open' : ''}`}
-                style={{ position: 'fixed', top: '78px', right: '18px', left: 'auto', bottom: 'auto', zIndex: 1190 }}
+                className="flex h-2 overflow-hidden rounded-full bg-muted"
+                role="meter"
+                aria-label="Tasks done"
+                aria-valuemin={0}
+                aria-valuemax={total}
+                aria-valuenow={done}
             >
-                <div className="smart-chat-header">
-                    <div className="smart-chat-avatar">
-                        {(workspace.team_name || 'T').slice(0, 1).toUpperCase()}
-                    </div>
-                    <div>
-                        <div className="smart-chat-title">{workspace.team_name || 'Team Chat'}</div>
-                        <div className="smart-chat-subtitle">
-                            <span className="smart-chat-dot" />
-                            We reply immediately
-                        </div>
-                    </div>
-                    <button
-                        className="smart-chat-close"
-                        type="button"
-                        onClick={() => setIsChatOpen(false)}
-                        aria-label="Close chat"
-                    >
-                        x
-                    </button>
-                </div>
-
-                <div className="smart-chat-messages thin-scrollbar">
-                    {chatMessages.length === 0 ? (
-                        <div className="smart-chat-empty">No messages yet. Start the conversation.</div>
-                    ) : (
-                        chatMessages.map((m) => {
-                            const isMine = String(m.sender_id || '') === String(user?.id || '');
-                            return (
-                                <div key={m.id} className={`smart-chat-row ${isMine ? 'mine' : ''}`}>
-                                    <div className={`smart-chat-bubble ${isMine ? 'mine' : ''}`}>
-                                        <div className="smart-chat-meta">
-                                            <strong>{m.sender_name || 'Unknown'}</strong>{' '}
-                                            <span className="text-muted">({m.sender_role || 'MEMBER'})</span>
-                                        </div>
-                                        <div>{m.message}</div>
-                                    </div>
-                                </div>
-                            );
-                        })
-                    )}
-                </div>
-
-                <form onSubmit={handleSendMessage} className="smart-chat-input-wrap">
-                    <input
-                        className="smart-chat-input"
-                        placeholder="Type your message here..."
-                        value={chatText}
-                        onChange={(e) => setChatText(e.target.value)}
-                    />
-                    <button className="smart-chat-send" disabled={chatSending || !chatText.trim()}>
-                        {chatSending ? '...' : '>'}
-                    </button>
-                </form>
+                <div className="h-full bg-data transition-[width] duration-500" style={{ width: `${pct(done)}%` }} />
+                <div className="h-full bg-data/35 transition-[width] duration-500" style={{ width: `${pct(doing)}%` }} />
             </div>
-        </motion.div>
+            <dl className="num flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
+                <div className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-data" /><dt>Done</dt><dd className="text-foreground">{done}</dd></div>
+                <div className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-data/35" /><dt>In progress</dt><dd className="text-foreground">{doing}</dd></div>
+                <div className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-muted ring-1 ring-input" /><dt>To do</dt><dd className="text-foreground">{todo}</dd></div>
+            </dl>
+        </div>
+    );
+}
+
+function WorkspaceSkeleton() {
+    return (
+        <div className="flex flex-col gap-6" aria-busy="true" aria-label="Loading workspace">
+            <Skeleton className="h-4 w-48" />
+            <div className="space-y-2">
+                <Skeleton className="h-7 w-80" />
+                <Skeleton className="h-4 w-full max-w-2xl" />
+            </div>
+            <Skeleton className="h-40 w-full rounded-[var(--radius-card)]" />
+            <div className="grid gap-3 md:grid-cols-3">
+                {[0, 1, 2].map((i) => <Skeleton key={i} className="h-56 rounded-[var(--radius-card)]" />)}
+            </div>
+        </div>
     );
 }
