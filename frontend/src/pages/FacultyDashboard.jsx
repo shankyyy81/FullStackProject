@@ -414,7 +414,7 @@ function AssignTeamDialog({ project, students, onClose, onSaved }) {
     );
 }
 
-function DeleteProjectDialog({ project, onClose, onDeleted }) {
+export function DeleteProjectDialog({ project, onClose, onDeleted }) {
     const [deleting, setDeleting] = useState(false);
 
     const handleDelete = async (e) => {
@@ -438,7 +438,7 @@ function DeleteProjectDialog({ project, onClose, onDeleted }) {
                 <AlertDialogHeader>
                     <AlertDialogTitle>Delete “{project?.title}”?</AlertDialogTitle>
                     <AlertDialogDescription>
-                        Its task board, chat and attachments go with it. This cannot be undone.
+                        Its task board, chat, attachments and literature go with it, and its students become available for other projects. This cannot be undone.
                     </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>

@@ -2,12 +2,15 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 import { getMyProjectsView, getProjectWorkspace } from '../api/projects';
+import { useAuth } from '../context/AuthContext';
+import { BOARD_COLUMNS, DueDate } from './workspace/TaskBoard';
 import { goalsOfProject } from '@/lib/sdg';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { GoalTile, PersonDisc, StatusPill } from '@/components/marks';
 
 export default function StudentDashboard() {
+    const { user } = useAuth();
     const [projects, setProjects] = useState([]);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState('');
@@ -63,9 +66,47 @@ export default function StudentDashboard() {
                     Your faculty adds you when they assign a team. The project then appears here with its board and chat.
                 </div>
             ) : (
-                projects.map((project) => <ProjectCard key={project.id} project={project} tasks={tasksById[project.id]} />)
+                <>
+                    <MyTasks projects={projects} tasksById={tasksById} userId={user?.id} />
+                    {projects.map((project) => <ProjectCard key={project.id} project={project} tasks={tasksById[project.id]} />)}
+                </>
             )}
         </div>
+    );
+}
+
+// Open tasks the faculty assigned to this student, soonest due first, undated last.
+function MyTasks({ projects, tasksById, userId }) {
+    const mine = projects
+        .flatMap((p) => (tasksById[p.id] || []).map((t) => ({ ...t, project: p })))
+        .filter((t) => t.assignee_id === userId && t.status !== 'DONE')
+        .sort((a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999'));
+
+    return (
+        <section aria-labelledby="my-tasks" className="rounded-[var(--radius-card)] border bg-card">
+            <div className="flex items-baseline justify-between px-5 pt-4 pb-3">
+                <h2 id="my-tasks" className="text-base font-medium">Assigned to you</h2>
+                <span className="num text-sm text-muted-foreground">{mine.length} open</span>
+            </div>
+            {mine.length === 0 ? (
+                <p className="mx-5 mb-5 rounded-md border border-dashed px-3 py-2.5 text-[13px] text-muted-foreground">
+                    Nothing assigned to you right now. Tasks your faculty assigns to you appear here.
+                </p>
+            ) : (
+                <ul className="border-t">
+                    {mine.map((t) => (
+                        <li key={t.id} className="relative flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-rule px-5 py-3 transition-colors last:border-b-0 hover:bg-muted/50">
+                            <Link to={`/project/${t.project.id}/workspace`} className="min-w-0 flex-1 outline-none after:absolute after:inset-0 focus-visible:after:ring-2 focus-visible:after:ring-ring">
+                                <span className="block truncate text-sm font-medium">{t.title}</span>
+                                <span className="block truncate text-[13px] text-muted-foreground">{t.project.title}</span>
+                            </Link>
+                            <span className="text-xs text-muted-foreground">{BOARD_COLUMNS.find((c) => c.key === t.status)?.label}</span>
+                            <DueDate task={t} />
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </section>
     );
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { ChevronRight, MessageSquare, Plus } from 'lucide-react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { ChevronRight, MessageSquare, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
     createProjectTask,
@@ -27,16 +27,22 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { GoalTile, PersonDisc, StatusPill } from '@/components/marks';
 import TaskBoard, { BOARD_COLUMNS } from './workspace/TaskBoard';
 import LiteraturePanel from './workspace/LiteraturePanel';
 import TeamChat from './workspace/TeamChat';
+import { DeleteProjectDialog } from './FacultyDashboard';
 
-const EMPTY_TASK = { title: '', description: '', status: 'TODO' };
+const EMPTY_TASK = { title: '', description: '', status: 'TODO', assignee_id: '', due_date: '' };
+const UNASSIGNED = 'none'; // Radix Select items cannot use an empty value
 
 export default function ProjectWorkspace() {
     const { projectId } = useParams();
     const { user } = useAuth();
+    const navigate = useNavigate();
+    const isFaculty = user?.role === 'FACULTY';
     const [workspace, setWorkspace] = useState(null);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState('');
@@ -52,6 +58,8 @@ export default function ProjectWorkspace() {
     const [ragUploadLoading, setRagUploadLoading] = useState(false);
     const [newTask, setNewTask] = useState(EMPTY_TASK);
     const [taskDialogOpen, setTaskDialogOpen] = useState(false);
+    const [editingTask, setEditingTask] = useState(null);
+    const [deletingProject, setDeletingProject] = useState(null);
     // attachment upload state: { [taskId]: { uploading: bool, error: string } }
     const [attachState, setAttachState] = useState({});
 
@@ -96,21 +104,44 @@ export default function ProjectWorkspace() {
         return groups;
     }, [workspace]);
 
-    const handleCreateTask = async (e) => {
+    const openTaskDialog = (task = null) => {
+        setEditingTask(task);
+        setNewTask(task ? {
+            title: task.title,
+            description: task.description || '',
+            status: task.status,
+            assignee_id: task.assignee_id || '',
+            due_date: task.due_date || '',
+        } : EMPTY_TASK);
+        setTaskDialogOpen(true);
+    };
+
+    const handleSaveTask = async (e) => {
         e.preventDefault();
         if (!newTask.title.trim()) return;
         setSaving(true);
+        const payload = {
+            title: newTask.title.trim(),
+            description: newTask.description.trim(),
+            status: newTask.status,
+            // Only faculty may assign; the backend rejects these fields from students.
+            ...(isFaculty && { assignee_id: newTask.assignee_id || null, due_date: newTask.due_date || null }),
+        };
         try {
-            await createProjectTask(projectId, {
-                title: newTask.title.trim(),
-                description: newTask.description.trim(),
-                status: newTask.status,
-            });
+            if (editingTask) {
+                const updatedTask = await updateProjectTask(projectId, editingTask.id, payload);
+                setWorkspace((prev) => ({
+                    ...prev,
+                    tasks: prev.tasks.map((t) => (t.id === updatedTask.id ? updatedTask : t)),
+                }));
+            } else {
+                await createProjectTask(projectId, payload);
+                await loadWorkspace();
+            }
             setNewTask(EMPTY_TASK);
             setTaskDialogOpen(false);
-            await loadWorkspace();
         } catch (err) {
-            toast.error(err.message || 'Failed to create task');
+            toast.error(err.message || 'Failed to save task');
         } finally {
             setSaving(false);
         }
@@ -251,9 +282,19 @@ export default function ProjectWorkspace() {
                             <MessageSquare /> Team chat
                             {chatMessages.length > 0 && <span className="num text-muted-foreground">{chatMessages.length}</span>}
                         </Button>
-                        <Button onClick={() => setTaskDialogOpen(true)}>
+                        <Button onClick={() => openTaskDialog()}>
                             <Plus /> Add task
                         </Button>
+                        {isFaculty && (
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <Button variant="outline" size="icon" aria-label="Delete project" onClick={() => setDeletingProject(workspace)}>
+                                        <Trash2 />
+                                    </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Delete project</TooltipContent>
+                            </Tooltip>
+                        )}
                     </div>
                 </div>
             </header>
@@ -315,7 +356,9 @@ export default function ProjectWorkspace() {
                 <TabsContent value="board">
                     <TaskBoard
                         groupedTasks={groupedTasks}
+                        userId={user?.id}
                         onMove={handleMoveTask}
+                        onEdit={openTaskDialog}
                         onUpload={handleUpload}
                         onDeleteAttachment={handleDeleteAttachment}
                         onDownloadAttachment={handleDownloadAttachment}
@@ -340,10 +383,12 @@ export default function ProjectWorkspace() {
 
             <Dialog open={taskDialogOpen} onOpenChange={setTaskDialogOpen}>
                 <DialogContent className="sm:max-w-md">
-                    <form onSubmit={handleCreateTask} className="grid gap-5">
+                    <form onSubmit={handleSaveTask} className="grid gap-5">
                         <DialogHeader>
-                            <DialogTitle>Add a task</DialogTitle>
-                            <DialogDescription className="truncate">{workspace.title}</DialogDescription>
+                            <DialogTitle>{editingTask ? 'Edit task' : 'Add a task'}</DialogTitle>
+                            <DialogDescription className="truncate">
+                                {editingTask?.created_by ? `Added by ${editingTask.created_by}` : workspace.title}
+                            </DialogDescription>
                         </DialogHeader>
                         <div className="grid gap-2">
                             <Label htmlFor="task-title">Title</Label>
@@ -380,13 +425,60 @@ export default function ProjectWorkspace() {
                                 ))}
                             </ToggleGroup>
                         </div>
+                        {isFaculty ? (
+                            <div className="grid gap-4 sm:grid-cols-2">
+                                <div className="grid gap-2">
+                                    <Label htmlFor="task-assignee">Assignee</Label>
+                                    <Select
+                                        value={newTask.assignee_id || UNASSIGNED}
+                                        onValueChange={(v) => setNewTask((prev) => ({ ...prev, assignee_id: v === UNASSIGNED ? '' : v }))}
+                                        disabled={!workspace.team_members?.length}
+                                    >
+                                        <SelectTrigger id="task-assignee" className="w-full">
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value={UNASSIGNED}>Unassigned</SelectItem>
+                                            {(workspace.team_members || []).map((m) => (
+                                                <SelectItem key={m.id} value={m.id}>{m.name}{m.role === 'Leader' ? ' (leader)' : ''}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                    {!workspace.team_members?.length && (
+                                        <p className="text-xs text-muted-foreground">Assign a team to this project first.</p>
+                                    )}
+                                </div>
+                                <div className="grid content-start gap-2">
+                                    <Label htmlFor="task-due">Due date</Label>
+                                    <Input
+                                        id="task-due"
+                                        type="date"
+                                        value={newTask.due_date}
+                                        onChange={(e) => setNewTask((prev) => ({ ...prev, due_date: e.target.value }))}
+                                    />
+                                </div>
+                            </div>
+                        ) : editingTask?.assignee_name || editingTask?.due_date ? (
+                            <p className="text-sm text-muted-foreground">
+                                {[editingTask.assignee_name && `Assigned to ${editingTask.assignee_name}`, editingTask.due_date && `due ${editingTask.due_date}`].filter(Boolean).join(', ')}.
+                                {' '}Only faculty can change the assignment.
+                            </p>
+                        ) : null}
                         <DialogFooter>
                             <Button type="button" variant="outline" onClick={() => setTaskDialogOpen(false)}>Cancel</Button>
-                            <Button type="submit" disabled={saving || !newTask.title.trim()}>{saving ? 'Adding…' : 'Add task'}</Button>
+                            <Button type="submit" disabled={saving || !newTask.title.trim()}>
+                                {saving ? 'Saving…' : editingTask ? 'Save task' : 'Add task'}
+                            </Button>
                         </DialogFooter>
                     </form>
                 </DialogContent>
             </Dialog>
+
+            <DeleteProjectDialog
+                project={deletingProject}
+                onClose={() => setDeletingProject(null)}
+                onDeleted={() => navigate('/dashboard', { replace: true })}
+            />
 
             <TeamChat
                 open={isChatOpen}

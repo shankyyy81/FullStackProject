@@ -39,6 +39,8 @@ class ProjectTask(BaseModel):
     created_by: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     attachments: List[TaskAttachment] = []
+    assignee_id: Optional[str] = None  # a student on the project team
+    due_date: Optional[str] = None     # ISO date, YYYY-MM-DD
 
 class ProjectChatMessage(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))

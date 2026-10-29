@@ -26,7 +26,7 @@ npm run build
 ```
 `npm run lint` is defined but the repo has no ESLint config, so it fails until one is added.
 
-Docker: `backend/Dockerfile` (CPU-only torch, uvicorn on 8000) and `frontend/Dockerfile` (Vite build served by nginx on 80, SPA fallback in `nginx.conf`). There is no compose file; MongoDB must be provided separately.
+Docker: `backend/Dockerfile` (CPU-only torch, uvicorn on 8000) and `frontend/Dockerfile` (Vite build served by nginx on 80, SPA fallback in `nginx.conf`). There is no compose file; MongoDB must be provided separately. Running containers are `sdg-backend` (127.0.0.1:8000), `sdg-frontend` (8080) and `mongo` (volume `sdg_mongodb_data`). Backend uploads have no volume and live only inside the `sdg-backend` container, so recreating it loses them.
 
 There is no test suite in either project.
 
@@ -38,6 +38,8 @@ There is no test suite in either project.
 - `Project` is the aggregate root: team (leader + members as `Link[User]`), tasks (with attachments), and chat messages are all **embedded** in the project document. `LiteratureDocument` is a separate collection keyed by `project_id` string, with its text chunks stored inline.
 - Auth: JWT bearer tokens (`app/core/security.py`, argon2 hashing). `get_current_user` in `app/routes/auth.py` is the dependency every protected route uses. Roles are `FACULTY` and `STUDENT` (`UserRole`).
 - Access control is per-route: `_is_project_participant` (faculty owner, team leader, or member) is duplicated in `routes/projects.py` and `routes/rag.py`, along with `_get_link_id`, which normalizes Beanie `Link` objects vs raw dicts. Keep both copies in sync when changing them.
+- Task assignment (`assignee_id`, `due_date` on embedded `ProjectTask`) is faculty-only and the assignee must be on the project team; both rules live in `_apply_assignment` in `routes/projects.py`. In `ProjectTaskUpdate`, an omitted field means unchanged and an explicit `null` clears it (`exclude_unset`). Changing a team unassigns tasks held by removed students.
+- Student availability (`is_assigned` in `/auth/students`) is derived from existing project teams, not stored on users, so deleting a project frees its students. Project delete also removes its literature documents and upload folders.
 - `routes/projects.py` returns "view" schemas (`ProjectView`, `ProjectWorkspaceView`, etc., in `app/schemas.py`) that resolve linked users into names; `/my-projects-view` is what the faculty dashboard uses.
 - ML (`routes/ml.py`): the model lives at `backend/app/ml_model/` (gitignored; download link in README). It is lazy-loaded on first `/ml/analyze` call; if loading fails, the error is cached and the endpoint returns 503 without retrying until restart. Sigmoid multi-label output: `>= 0.3` is "applied", `>= 0.7` is "most suitable" (falls back to top 2). If `GROQ_API_KEY` is set, Groq is then asked for numbered UN targets per SDG (only those with confidence `>= 0.8` kept). `/ml/analyze` is unauthenticated (the landing page calls it).
 - RAG (`routes/rag.py`): uploads (PDF/TXT/MD, 15 MB max) are chunked (600 chars, 120 overlap) and retrieved by simple token-overlap scoring, no embeddings, then answered by Groq. Files are stored under `backend/uploads/` (gitignored), as are task attachments.
@@ -47,6 +49,7 @@ There is no test suite in either project.
 - Auth state lives in `src/context/AuthContext.jsx`; the JWT is in `localStorage['token']`. `src/api/client.js` `fetchClient` adds the bearer header and redirects to `/login` on 401.
 - The API base URL `http://localhost:8000` is hard-coded in several places (`api/client.js`, `api/projects.js`, `AuthContext.jsx`, `Register.jsx`), not read from env. Change all of them together.
 - `@/` aliases `src/`. shadcn components are in `src/components/ui/` (add more via the shadcn CLI/MCP, `components.json`). Shared visual primitives (`GoalTile`, `StatusPill`, `PersonDisc`, brand marks) are in `src/components/marks.jsx`; SDG metadata (official colours, names, target counts, label parsing) is in `src/lib/sdg.js`.
+- The shadcn CLI generates React 19-style components (plain functions, `ref` as a prop), but the app runs React 18. Any ui wrapper that Radix hands a ref to must use `React.forwardRef`, otherwise popups render off-screen and the console warns "Function components cannot be given refs". Today that is `Button` (child of every `asChild` trigger) and the Dialog/AlertDialog/Sheet overlays (portal children). Re-apply this after regenerating those components with the CLI.
 - Design tokens are in `src/index.css` (app light/dark tokens and a separate landing palette). Theme is handled by `next-themes` with storage key `theme`.
 
 ### Frontend design rules
