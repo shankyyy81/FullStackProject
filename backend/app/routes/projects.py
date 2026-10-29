@@ -165,7 +165,7 @@ async def list_my_projects_view(
     users_by_id = {}
     if user_ids:
         # Use Motor client directly to avoid Beanie fetch_links issues
-        cursor = User.get_pymongo_collection().find({"_id": {"$in": list(user_ids)}})
+        cursor = User.get_motor_collection().find({"_id": {"$in": list(user_ids)}})
         user_docs = await cursor.to_list(length=None)
         for doc in user_docs:
             users_by_id[str(doc["_id"])] = doc
@@ -233,7 +233,7 @@ async def get_project_workspace(
 
     users_by_id = {}
     if user_ids:
-        cursor = User.get_pymongo_collection().find({"_id": {"$in": list(user_ids)}})
+        cursor = User.get_motor_collection().find({"_id": {"$in": list(user_ids)}})
         user_docs = await cursor.to_list(length=None)
         for doc in user_docs:
             users_by_id[str(doc["_id"])] = doc

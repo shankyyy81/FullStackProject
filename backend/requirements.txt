@@ -1,7 +1,8 @@
 fastapi
 uvicorn[standard]
-motor
-beanie
+motor==3.7.1
+beanie==1.30.0
+pymongo==4.13.2
 python-dotenv
 pydantic
 pydantic-settings
