@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Download, Loader2, Paperclip, X } from 'lucide-react';
+import { Download, Loader2, Paperclip, Pencil, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -19,7 +19,26 @@ export const formatBytes = (bytes) => {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-export default function TaskBoard({ groupedTasks, onMove, onUpload, onDeleteAttachment, onDownloadAttachment, attachState }) {
+// Due dates are plain YYYY-MM-DD days; parse them as local days, not UTC midnight.
+const parseDay = (iso) => {
+    const [y, m, d] = iso.split('-').map(Number);
+    return new Date(y, m - 1, d);
+};
+export const isOverdue = (task) =>
+    Boolean(task.due_date) && task.status !== 'DONE' && parseDay(task.due_date) < new Date(new Date().toDateString());
+
+export function DueDate({ task }) {
+    if (!task.due_date) return null;
+    const overdue = isOverdue(task);
+    return (
+        <span className={cn('num inline-flex h-5 flex-none items-center whitespace-nowrap rounded-full px-2 text-xs font-medium', overdue ? 'bg-pill-warning text-pill-warning-ink' : 'bg-pill-neutral text-pill-neutral-ink')}>
+            {overdue ? 'Overdue · ' : 'Due '}
+            {parseDay(task.due_date).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
+        </span>
+    );
+}
+
+export default function TaskBoard({ groupedTasks, userId, onMove, onEdit, onUpload, onDeleteAttachment, onDownloadAttachment, attachState }) {
     const [dragOverCol, setDragOverCol] = useState(null);
 
     const handleDrop = (e, colKey) => {
@@ -57,7 +76,9 @@ export default function TaskBoard({ groupedTasks, onMove, onUpload, onDeleteAtta
                                     <TaskCard
                                         key={task.id}
                                         task={task}
+                                        isMine={!!userId && task.assignee_id === userId}
                                         onMove={onMove}
+                                        onEdit={onEdit}
                                         onUpload={onUpload}
                                         onDeleteAttachment={onDeleteAttachment}
                                         onDownloadAttachment={onDownloadAttachment}
@@ -73,7 +94,7 @@ export default function TaskBoard({ groupedTasks, onMove, onUpload, onDeleteAtta
     );
 }
 
-function TaskCard({ task, onMove, onUpload, onDeleteAttachment, onDownloadAttachment, attach }) {
+function TaskCard({ task, isMine, onMove, onEdit, onUpload, onDeleteAttachment, onDownloadAttachment, attach }) {
     const fileRef = useRef(null);
     const attachments = task.attachments || [];
 
@@ -90,6 +111,7 @@ function TaskCard({ task, onMove, onUpload, onDeleteAttachment, onDownloadAttach
         >
             <h4 className="text-sm font-medium leading-5">{task.title}</h4>
             {task.description && <p className="mt-1 line-clamp-3 text-[13px] leading-5 text-muted-foreground">{task.description}</p>}
+            {task.due_date && <div className="mt-2"><DueDate task={task} /></div>}
 
             {attachments.length > 0 && (
                 <ul className="mt-3 flex flex-col gap-1">
@@ -120,8 +142,21 @@ function TaskCard({ task, onMove, onUpload, onDeleteAttachment, onDownloadAttach
             )}
 
             <div className="mt-3 flex items-center gap-2">
-                {task.created_by && <PersonDisc name={task.created_by} className="size-6 text-[10px]" />}
-                <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{task.created_by || 'Unknown'}</span>
+                {task.assignee_name && <PersonDisc name={task.assignee_name} className="size-6 text-[10px]" />}
+                <span
+                    className={cn('min-w-0 flex-1 truncate text-xs', isMine ? 'font-medium' : 'text-muted-foreground')}
+                    title={task.created_by ? `Added by ${task.created_by}` : undefined}
+                >
+                    {isMine ? 'You' : task.assignee_name || 'Unassigned'}
+                </span>
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <Button variant="ghost" size="icon-sm" aria-label={`Edit ${task.title}`} onClick={() => onEdit(task)}>
+                            <Pencil />
+                        </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Edit task</TooltipContent>
+                </Tooltip>
                 <input
                     type="file"
                     ref={fileRef}

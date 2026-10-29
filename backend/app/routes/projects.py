@@ -6,11 +6,14 @@ import aiofiles
 import os
 import uuid
 import mimetypes
+import shutil
 from pathlib import Path
 
 from app.routes.auth import get_current_user
 from app.models.user import User, UserRole
 from app.models.project import Project, ProjectStatus, Team, ProjectTask, ProjectChatMessage, TaskAttachment
+from app.models.literature import LiteratureDocument
+from app.routes.rag import LITERATURE_UPLOAD_ROOT
 from app.schemas import (
     ProjectCreate,
     ProjectAssign,
@@ -22,6 +25,7 @@ from app.schemas import (
     ProjectChatMessageCreate,
     ProjectChatMessageView,
     TaskAttachmentView,
+    TeamMemberView,
 )
 
 # Directory where uploaded files are stored
@@ -64,6 +68,39 @@ def _is_project_participant(project: Project, current_user: User) -> bool:
             if _get_link_id(member) == current_user.id:
                 return True
     return False
+
+def _team_member_ids(project: Project) -> List[str]:
+    """Student ids on the project team as strings, leader first."""
+    if not project.team:
+        return []
+    ids = [_get_link_id(project.team.leader)] + [_get_link_id(m) for m in (project.team.members or [])]
+    return list(dict.fromkeys(str(i) for i in ids if i))
+
+def _is_project_faculty(project: Project, current_user: User) -> bool:
+    return current_user.role == UserRole.FACULTY and _get_link_id(project.faculty) == current_user.id
+
+def _apply_assignment(project: Project, task: ProjectTask, fields: dict, current_user: User):
+    """Set assignee_id / due_date for the keys present in fields. Only the project's faculty may do this."""
+    if not fields:
+        return
+    if not _is_project_faculty(project, current_user):
+        raise HTTPException(status_code=403, detail="Only the project's faculty can assign tasks or set due dates")
+    if "assignee_id" in fields:
+        assignee_id = fields["assignee_id"] or None
+        if assignee_id and assignee_id not in _team_member_ids(project):
+            raise HTTPException(status_code=400, detail="Assignee must be a student on this project's team")
+        task.assignee_id = assignee_id
+    if "due_date" in fields:
+        task.due_date = fields["due_date"].isoformat() if fields["due_date"] else None
+
+async def _assignee_name(task: ProjectTask):
+    if not task.assignee_id:
+        return None
+    user = await User.get(PydanticObjectId(task.assignee_id))
+    return user.full_name if user else None
+
+def _task_view(task: ProjectTask, assignee_name=None) -> ProjectTaskView:
+    return ProjectTaskView(**task.model_dump(), assignee_name=assignee_name)
 
 @router.post("/", response_model=Project)
 async def create_project(
@@ -258,28 +295,14 @@ async def get_project_workspace(
                 if member_doc and member_doc.get("full_name"):
                     member_names.append(member_doc["full_name"])
 
-    def _attachment_view(a):
-        return TaskAttachmentView(
-            id=a.id,
-            filename=a.filename,
-            original_name=a.original_name,
-            content_type=a.content_type,
-            size_bytes=a.size_bytes,
-            uploaded_by=a.uploaded_by,
-            uploaded_at=a.uploaded_at,
-        )
+    def _name(user_id):
+        doc = users_by_id.get(str(user_id)) if user_id else None
+        return doc.get("full_name") if doc else None
 
-    task_views = [
-        ProjectTaskView(
-            id=t.id,
-            title=t.title,
-            description=t.description,
-            status=t.status,
-            created_by=t.created_by,
-            created_at=t.created_at,
-            attachments=[_attachment_view(a) for a in (t.attachments or [])],
-        )
-        for t in (project.tasks or [])
+    task_views = [_task_view(t, _name(t.assignee_id)) for t in (project.tasks or [])]
+    team_members = [
+        TeamMemberView(id=uid, name=_name(uid) or "Unknown", role="Leader" if i == 0 else "Member")
+        for i, uid in enumerate(_team_member_ids(project))
     ]
 
     return ProjectWorkspaceView(
@@ -292,6 +315,7 @@ async def get_project_workspace(
         team_name=project.team.name if project.team else None,
         leader_name=leader_name,
         member_names=member_names,
+        team_members=team_members,
         tasks=task_views
     )
 
@@ -313,20 +337,13 @@ async def add_project_task(
         status=payload.status,
         created_by=current_user.full_name
     )
+    _apply_assignment(project, task, payload.model_dump(include={"assignee_id", "due_date"}, exclude_none=True), current_user)
     if project.tasks is None:
         project.tasks = []
     project.tasks.append(task)
     await project.save()
 
-    return ProjectTaskView(
-        id=task.id,
-        title=task.title,
-        description=task.description,
-        status=task.status,
-        created_by=task.created_by,
-        created_at=task.created_at,
-        attachments=[],
-    )
+    return _task_view(task, await _assignee_name(task))
 @router.get("/{project_id}/chat", response_model=List[ProjectChatMessageView])
 async def list_project_chat(
     project_id: PydanticObjectId,
@@ -413,23 +430,12 @@ async def update_project_task(
         task.description = payload.description
     if payload.status is not None:
         task.status = payload.status
+    _apply_assignment(project, task, payload.model_dump(include={"assignee_id", "due_date"}, exclude_unset=True), current_user)
 
     project.tasks[task_idx] = task
     await project.save()
 
-    return ProjectTaskView(
-        id=task.id,
-        title=task.title,
-        description=task.description,
-        status=task.status,
-        created_by=task.created_by,
-        created_at=task.created_at,
-        attachments=[TaskAttachmentView(
-            id=a.id, filename=a.filename, original_name=a.original_name,
-            content_type=a.content_type, size_bytes=a.size_bytes,
-            uploaded_by=a.uploaded_by, uploaded_at=a.uploaded_at,
-        ) for a in (task.attachments or [])],
-    )
+    return _task_view(task, await _assignee_name(task))
 
 @router.delete("/{project_id}")
 async def delete_project(
@@ -447,6 +453,10 @@ async def delete_project(
         raise HTTPException(status_code=403, detail="Not allowed to delete this project")
 
     await project.delete()
+    # Students need no update: availability is derived from the teams of existing projects.
+    await LiteratureDocument.find(LiteratureDocument.project_id == str(project_id)).delete()
+    shutil.rmtree(UPLOAD_ROOT / str(project_id), ignore_errors=True)
+    shutil.rmtree(LITERATURE_UPLOAD_ROOT / str(project_id), ignore_errors=True)
     return {"status": "deleted", "id": str(project_id)}
 
 @router.patch("/{project_id}/assign", response_model=Project)
@@ -524,6 +534,11 @@ async def assign_students(
     # 5. Build team and save
     team_name = payload.team_name or (project.team.name if project.team else "Team A")
     project.team = Team(name=team_name, leader=leader_user, members=members)
+    # Students taken off the team lose their tasks back to the unassigned pool.
+    team_ids = set(_team_member_ids(project))
+    for t in project.tasks or []:
+        if t.assignee_id and t.assignee_id not in team_ids:
+            t.assignee_id = None
     await project.save()
     return project
 

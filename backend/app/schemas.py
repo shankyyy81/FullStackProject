@@ -3,7 +3,7 @@ from typing import Optional, List, Dict
 from beanie import PydanticObjectId
 from app.models.user import UserRole, FacultyProfile, StudentProfile
 from app.models.project import TaskStatus
-from datetime import datetime
+from datetime import datetime, date
 
 
 class UserCreate(BaseModel):
@@ -60,11 +60,16 @@ class ProjectTaskCreate(BaseModel):
     title: str
     description: Optional[str] = ""
     status: TaskStatus = TaskStatus.TODO
+    assignee_id: Optional[str] = None
+    due_date: Optional[date] = None
 
 class ProjectTaskUpdate(BaseModel):
+    # assignee_id / due_date: omitted = unchanged, explicit null = cleared
     title: Optional[str] = None
     description: Optional[str] = None
     status: Optional[TaskStatus] = None
+    assignee_id: Optional[str] = None
+    due_date: Optional[date] = None
 
 class TaskAttachmentView(BaseModel):
     id: str
@@ -83,6 +88,14 @@ class ProjectTaskView(BaseModel):
     created_by: Optional[str] = None
     created_at: datetime
     attachments: List[TaskAttachmentView] = []
+    assignee_id: Optional[str] = None
+    assignee_name: Optional[str] = None
+    due_date: Optional[str] = None
+
+class TeamMemberView(BaseModel):
+    id: str
+    name: str
+    role: str  # "Leader" or "Member"
 
 class ProjectWorkspaceView(BaseModel):
     id: str
@@ -94,6 +107,7 @@ class ProjectWorkspaceView(BaseModel):
     team_name: Optional[str] = None
     leader_name: Optional[str] = None
     member_names: List[str] = []
+    team_members: List[TeamMemberView] = []
     tasks: List[ProjectTaskView] = []
 
 class ProjectChatMessageCreate(BaseModel):
